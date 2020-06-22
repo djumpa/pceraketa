@@ -1,3 +1,5 @@
+#include <Adafruit_BMP280.h>
+#include <Adafruit_Sensor.h>
 #include <Arduino.h>
 #include <SD.h>
 #include <SPI.h>
@@ -5,7 +7,7 @@
 #include <Wire.h>
 
 #define MPU9250_ADDRESS 0x68
-#define BMP280_ADDRESS 0x68
+#define BMP280_ADDRESS 0x76
 
 #define GYRO_FULL_SCALE_250_DPS 0x00
 #define GYRO_FULL_SCALE_500_DPS 0x08
@@ -17,7 +19,18 @@
 #define ACC_FULL_SCALE_8_G 0x10
 #define ACC_FULL_SCALE_16_G 0x18
 
+bool debug_imu = false;
+bool debug_baro = false;
+bool debug_deploy = false;
+
+Adafruit_BMP280 bmp;
+
 Servo myservo;  // create servo object to control a servo
+
+int led_hb = 4;
+int led_state_hb = LOW;
+int led_arm = 3;
+int butt_arm = 2;
 
 const int chipSelect = 10;
 
@@ -33,20 +46,40 @@ float elapsedTime, currentTime, previousTime;
 float roll, pitch, yaw;
 
 int c = 0;
-char counter_char[5];
+
 int counter;
 char counter_arr[10];
 char filename[10];
-Sd2Card card;
-SdVolume volume;
-SdFile root;
+
+int armed;
+bool deploy_chute;
 File myFile;
 
-void stop(){
-    while(1){
+float baro_pressure_avg;
+float baro_pressure_avg_previous;
+int baro_samples = 25;
+int frame_num;
 
+unsigned long previousMillis = 0;  // will store last time LED was updated
+
+const long interval = 1000;
+
+// This function halts the execution
+void stop() {
+  while (1) {
+    if (led_state_hb == LOW) {
+      led_state_hb = HIGH;
+    } else {
+      led_state_hb = LOW;
     }
+
+    // set the LED with the ledState of the variable:
+    digitalWrite(led_hb, led_state_hb);
+    delay(100);
+  }
+  
 }
+
 void calculate_IMU_error() {
   // We can call this funtion in the setup section to calculate the
   // accelerometer and gyro data error. From here we will get the error values
@@ -57,7 +90,7 @@ void calculate_IMU_error() {
     Wire.beginTransmission(MPU9250_ADDRESS);
     Wire.write(0x3B);
     Wire.endTransmission(false);
-    Wire.requestFrom(MPU9250_ADDRESS, 6, true);
+    Wire.requestFrom(MPU9250_ADDRESS, 6);
     acc_x = (Wire.read() << 8 | Wire.read()) / 16384.0;
     acc_y = (Wire.read() << 8 | Wire.read()) / 16384.0;
     acc_z = (Wire.read() << 8 | Wire.read()) / 16384.0;
@@ -79,7 +112,7 @@ void calculate_IMU_error() {
     Wire.beginTransmission(MPU9250_ADDRESS);
     Wire.write(0x43);
     Wire.endTransmission(false);
-    Wire.requestFrom(MPU9250_ADDRESS, 6, true);
+    Wire.requestFrom(MPU9250_ADDRESS, 6);
     gyro_x = Wire.read() << 8 | Wire.read();
     gyro_y = Wire.read() << 8 | Wire.read();
     gyro_z = Wire.read() << 8 | Wire.read();
@@ -107,75 +140,27 @@ void calculate_IMU_error() {
 }
 
 void setup() {
-  myservo.attach(8);  // attaches the servo on pin 9 to the servo object
-  Serial.begin(9600);
+  pinMode(led_hb, OUTPUT);
+  pinMode(led_arm, OUTPUT);
+  pinMode(butt_arm, INPUT_PULLUP);
+  digitalWrite(led_arm, LOW);
+  myservo.attach(9);
+  Serial.begin(115200);
 
-  //   Serial.print("\nInitializing SD card...");
-
-  // we'll use the initialization code from the utility libraries
-  // since we're just testing if the card is working!
-  //   if (!card.init(SPI_HALF_SPEED, chipSelect)) {
-  //     Serial.println("initialization failed. Things to check:");
-  //     Serial.println("* is a card inserted?");
-  //     Serial.println("* is your wiring correct?");
-  //     Serial.println(
-  //         "* did you change the chipSelect pin to match your shield or
-  //         module?");
-  //     while (1)
-  //       ;
-  //   } else {
-  //     Serial.println("Wiring is correct and a card is present.");
-  //   }
-
-  //   // print the type of card
-  // //   Serial.println();
-  // //   Serial.print("Card type:         ");
-  // //   switch (card.type()) {
-  // //     case SD_CARD_TYPE_SD1:
-  // //       Serial.println("SD1");
-  // //       break;
-  // //     case SD_CARD_TYPE_SD2:
-  // //       Serial.println("SD2");
-  // //       break;
-  // //     case SD_CARD_TYPE_SDHC:
-  // //       Serial.println("SDHC");
-  // //       break;
-  // //     default:
-  // //       Serial.println("Unknown");
-  // //   }
-
-  //   // Now we will try to open the 'volume'/'partition' - it should be FAT16
-  //   or
-  //   // FAT32
-  //   if (!volume.init(card)) {
-  //     Serial.println(
-  //         "Could not find FAT16/FAT32 partition.\nMake sure you've formatted
-  //         the " "card");
-  //     while (1)
-  //       ;
-  //   }
-
+  // Init SD Card
   Serial.print("Initializing SD card...");
-  // On the Ethernet Shield, CS is pin 4. It's set as an output by default.
-  // Note that even if it's not used as the CS pin, the hardware SS pin
-  // (10 on most Arduino boards, 53 on the Mega) must be left as an output
-  // or the SD library functions will not work.
   pinMode(10, OUTPUT);
-
   if (!SD.begin(chipSelect)) {
-    Serial.println("initialization failed!");
+    Serial.println("Initialization failed!");
     stop();
   }
-  Serial.println("initialization done.");
+  Serial.println("Initialization done.");
 
-  // re-open the file for reading:
+  // Read current counter
   myFile = SD.open("COUNTER.TXT");
   if (myFile) {
     Serial.print("Counter: ");
-
-    // read from the file until there's nothing else in it:
-    uint8_t i = 0;  // a counter
-
+    uint8_t i = 0;
     while (myFile.available()) {
       counter_arr[i] = myFile.read();
       i++;
@@ -190,32 +175,26 @@ void setup() {
   } else {
     // if the file didn't open, print an error:
     Serial.println("error opening COUNTER.TXT");
-    stop();
+    // stop();
   }
+
+  // Add +1 to counter and save it for the future
   myFile = SD.open("COUNTER.TXT", FILE_WRITE | O_TRUNC);
-
-
-
-  // open the file. note that only one file can be open at a time,
-  // so you have to close this one before opening another.
-
-      if (myFile) {
+  if (myFile) {
     Serial.print("Adding counter... ");
-    myFile.println(counter+1);
-    // close the file:
+    myFile.println(counter + 1);
     myFile.close();
     Serial.println("Done!");
   } else {
     // if the file didn't open, print an error:
-        Serial.println("error opening COUNTER.TXT");
-
+    Serial.println("error opening COUNTER.TXT");
+    // stop();
   }
-
+  // Write header to the actual log
   myFile = SD.open(filename, FILE_WRITE | O_TRUNC | O_CREAT);
-  // if the file opened okay, write to it:
   if (myFile) {
     Serial.print("Writing header... ");
-    myFile.println("looptime,ax,ay,az,gx,gy,gz");
+    myFile.println("looptime,ax,ay,az,gx,gy,gz,baro_temp,baro_pressure");
     // close the file:
     myFile.close();
     Serial.println("Done!");
@@ -224,38 +203,6 @@ void setup() {
     Serial.print("error opening ");
     Serial.println(filename);
   }
-
-  //   Serial.print("Clusters:          ");
-  //   Serial.println(volume.clusterCount());
-  //   Serial.print("Blocks x Cluster:  ");
-  //   Serial.println(volume.blocksPerCluster());
-
-  //   Serial.print("Total Blocks:      ");
-  //   Serial.println(volume.blocksPerCluster() * volume.clusterCount());
-  //   Serial.println();
-
-  //   // print the type and size of the first FAT-type volume
-  //   uint32_t volumesize;
-  //   Serial.print("Volume type is:    FAT");
-  //   Serial.println(volume.fatType(), DEC);
-
-  //   volumesize = volume.blocksPerCluster();  // clusters are collections of
-  //   blocks volumesize *= volume.clusterCount();     // we'll have a lot of
-  //   clusters volumesize /= 2;  // SD card blocks are always 512 bytes (2
-  //   blocks are 1KB) Serial.print("Volume size (Kb):  ");
-  //   Serial.println(volumesize);
-  //   Serial.print("Volume size (Mb):  ");
-  //   volumesize /= 1024;
-  //   Serial.println(volumesize);
-  //   Serial.print("Volume size (Gb):  ");
-  //   Serial.println((float)volumesize / 1024.0);
-
-  //   Serial.println("\nFiles found on the card (name, date and size in bytes):
-  //   "); root.openRoot(volume);
-
-  // list all files in the card with date and size
-  //   root.ls(LS_R | LS_DATE | LS_SIZE);
-  //   root.close();
 
   Wire.begin();  // join i2c bus (address optional for master)
 
@@ -278,15 +225,43 @@ void setup() {
  (1000deg/s full scale) Wire.endTransmission(true); delay(20);
  */
 
+  if (!bmp.begin(BMP280_ADDRESS)) {
+    Serial.println("Pressure sensor not found!");
+    stop();
+  }
+
   calculate_IMU_error();
   delay(20);
 }
 
 void loop() {
+  previousTime =
+      currentTime;  // Previous time is stored before the actual time read
+  currentTime = millis();  // Current time actual time read
+  elapsedTime =
+      (currentTime - previousTime) / 1000;  // Divide by 1000 to get seconds
+
+  if (currentTime - previousMillis >= interval) {
+    // save the last time you blinked the LED
+    previousMillis = currentTime;
+
+    // if the LED is off turn it on and vice-versa:
+    if (led_state_hb == LOW) {
+      led_state_hb = HIGH;
+    } else {
+      led_state_hb = LOW;
+    }
+
+    // set the LED with the ledState of the variable:
+    digitalWrite(led_hb, led_state_hb);
+  }
+
+  armed = !digitalRead(butt_arm);  // read the input pin
+
   Wire.beginTransmission(MPU9250_ADDRESS);
   Wire.write(0x3B);  // Start with register 0x3B (ACCEL_XOUT_H)
   Wire.endTransmission(false);
-  Wire.requestFrom(MPU9250_ADDRESS, 6, true);
+  Wire.requestFrom(MPU9250_ADDRESS, 6);
 
   // For a range of +-2g, we need to divide the raw values by 16384, according
   // to the datasheet
@@ -302,17 +277,12 @@ void loop() {
       6.07;  // AccErrorY ~(-1.58)
 
   // === Read gyroscope data === //
-  previousTime =
-      currentTime;  // Previous time is stored before the actual time read
-  currentTime = millis();  // Current time actual time read
-  elapsedTime =
-      (currentTime - previousTime) / 1000;  // Divide by 1000 to get seconds
+
   Wire.beginTransmission(MPU9250_ADDRESS);
   Wire.write(0x43);  // Gyro data first register address 0x43
   Wire.endTransmission(false);
-  Wire.requestFrom(MPU9250_ADDRESS, 6,
-                   true);  // Read 4 registers total, each axis value is stored
-                           // in 2 registers
+  Wire.requestFrom(MPU9250_ADDRESS, 6);  // Read 4 registers total, each axis
+                                         // value is stored in 2 registers
   gyro_x = (Wire.read() << 8 | Wire.read()) /
            131.0;  // For a 250deg/s range we have to divide first the raw value
                    // by 131.0, according to the datasheet
@@ -331,43 +301,83 @@ void loop() {
   roll = 0.96 * gyroAngleX + 0.04 * accAngleX;
   pitch = 0.96 * gyroAngleY + 0.04 * accAngleY;
 
-  // Print the values on the serial monitor
-  Serial.print(roll);
-  Serial.print("/");
-  Serial.print(pitch);
-  Serial.print("/");
-  Serial.println(yaw);
-
-  if (pos >= 180) {
-    direction = 1;
+  if (debug_imu) {
+    // Print the values on the serial monitor
+    Serial.print(roll);
+    Serial.print("/");
+    Serial.print(pitch);
+    Serial.print("/");
+    Serial.println(yaw);
   }
-  if (pos <= 0) {
-    direction = 0;
+  float baro_temp = bmp.readTemperature();
+  // načtení naměřeného tlaku ze senzoru
+  float baro_pressure = (bmp.readPressure());
+  // výpis všech dostupných informací ze senzoru BMP
+  // výpis teploty
+  if (debug_baro) {
+    Serial.print("Temperature: ");
+    Serial.print(baro_temp);
+    Serial.println(" °C.");
+    // výpis barometrického tlaku v hekto Pascalech
+    Serial.print("Pressure: ");
+    Serial.print(baro_pressure);
+    Serial.println(" Pa");
+    // vytištění prázdného řádku a pauza po dobu 2 vteřin
+    Serial.println();
   }
 
-  if (direction == 0) {
-    pos++;
+  baro_pressure_avg += baro_pressure;
+
+  if ((frame_num + 1) % baro_samples == 0) {
+    baro_pressure_avg /= baro_samples;
+
+    if (debug_deploy) {
+      Serial.print("Previous window: ");
+      Serial.println(baro_pressure_avg_previous);
+      Serial.print("Current window: ");
+      Serial.println(baro_pressure_avg);
+      Serial.print("Delta: ");
+      Serial.println(baro_pressure_avg - baro_pressure_avg_previous);
+    }
+    if ((baro_pressure_avg - baro_pressure_avg_previous) > 10) {
+      deploy_chute = true;
+    }
+    baro_pressure_avg_previous = baro_pressure_avg;
+    baro_pressure_avg = 0;
+  }
+
+  if (deploy_chute) {
+    myservo.write(180);
   } else {
-    pos--;
+    myservo.write(0);
   }
-  myservo.write(pitch);
 
-  myFile = SD.open(filename, FILE_WRITE);
+  if (armed) {
+    digitalWrite(led_arm, HIGH);
+    
+    myservo.write(pitch);
 
-  myFile.print(currentTime);
-  myFile.print(",");
-  myFile.print(acc_x);
-  myFile.print(",");
-  myFile.print(acc_y);
-  myFile.print(",");
-  myFile.print(acc_z);
-  myFile.print(",");
-  myFile.print(gyro_x);
-  myFile.print(",");
-  myFile.print(gyro_y);
-  myFile.print(",");
-  myFile.println(gyro_z);
-  myFile.close();
+    myFile = SD.open(filename, FILE_WRITE);
 
+    myFile.print(currentTime);
+    myFile.print(",");
+    myFile.print(acc_x);
+    myFile.print(",");
+    myFile.print(acc_y);
+    myFile.print(",");
+    myFile.print(acc_z);
+    myFile.print(",");
+    myFile.print(gyro_x);
+    myFile.print(",");
+    myFile.print(gyro_y);
+    myFile.print(",");
+    myFile.print(gyro_z);
+    myFile.print(",");
+    myFile.print(baro_temp);
+    myFile.print(",");
+    myFile.println(baro_pressure);
+    myFile.close();
+  }
   // Serial.println(pos, DEC);
+  frame_num++;
 }
