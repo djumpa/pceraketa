@@ -27,15 +27,19 @@ Adafruit_BMP280 bmp;
 
 Servo myservo;  // create servo object to control a servo
 
-int led_hb = 4;
-int led_state_hb = LOW;
-int led_arm = 3;
-int butt_arm = 2;
+const PROGMEM uint8_t led_hb = 4;
+uint8_t led_state_hb = LOW;
+const PROGMEM uint8_t led_arm = 3;
+const PROGMEM uint8_t butt_arm = 2;
+const PROGMEM uint8_t servo_1 = 9;
+const PROGMEM uint8_t servo_latch = 0; //degrees
+const PROGMEM uint8_t servo_release = 90; //degrees
+uint8_t print_counter;
 
-const int chipSelect = 10;
+const PROGMEM uint8_t chipSelect = 10;
 
-int pos = 0;  // variable to store the servo position
-int direction = 0;
+uint8_t pos = 0;  // variable to store the servo position
+uint8_t direction = 0;
 
 float acc_x, acc_y, acc_z;
 float gyro_x, gyro_y, gyro_z;
@@ -45,19 +49,19 @@ float accAngleX, accAngleY, gyroAngleX, gyroAngleY, gyroAngleZ;
 float elapsedTime, currentTime, previousTime;
 float roll, pitch, yaw;
 
-int c = 0;
+uint8_t c = 0;
 
 int counter;
 char counter_arr[10];
 char filename[10];
 
-int armed;
+uint8_t armed;
 bool deploy_chute;
 File myFile;
 
 float baro_pressure_avg;
 float baro_pressure_avg_previous;
-int baro_samples = 25;
+uint8_t baro_samples = 25;
 int frame_num;
 
 unsigned long previousMillis = 0;  // will store last time LED was updated
@@ -127,15 +131,15 @@ void calculate_IMU_error() {
   GyroErrorY = GyroErrorY / 200;
   GyroErrorZ = GyroErrorZ / 200;
   // Print the error values on the Serial Monitor
-  Serial.print("AccErrorX: ");
+  Serial.print(F("AccErrorX: "));
   Serial.println(AccErrorX);
-  Serial.print("AccErrorY: ");
+  Serial.print(F("AccErrorY: "));
   Serial.println(AccErrorY);
-  Serial.print("GyroErrorX: ");
+  Serial.print(F("GyroErrorX: "));
   Serial.println(GyroErrorX);
-  Serial.print("GyroErrorY: ");
+  Serial.print(F("GyroErrorY: "));
   Serial.println(GyroErrorY);
-  Serial.print("GyroErrorZ: ");
+  Serial.print(F("GyroErrorZ: "));
   Serial.println(GyroErrorZ);
 }
 
@@ -144,22 +148,23 @@ void setup() {
   pinMode(led_arm, OUTPUT);
   pinMode(butt_arm, INPUT_PULLUP);
   digitalWrite(led_arm, LOW);
-  myservo.attach(9);
+  myservo.attach(servo_1);
+  myservo.write(servo_latch);
   Serial.begin(115200);
 
   // Init SD Card
-  Serial.print("Initializing SD card...");
+  Serial.print(F("Initializing SD card..."));
   pinMode(10, OUTPUT);
   if (!SD.begin(chipSelect)) {
-    Serial.println("Initialization failed!");
+    Serial.println(F("Initialization failed!"));
     stop();
   }
-  Serial.println("Initialization done.");
+  Serial.println(F("Initialization done."));
 
   // Read current counter
   myFile = SD.open("COUNTER.TXT");
   if (myFile) {
-    Serial.print("Counter: ");
+    Serial.print(F("Counter: "));
     uint8_t i = 0;
     while (myFile.available()) {
       counter_arr[i] = myFile.read();
@@ -174,34 +179,35 @@ void setup() {
     myFile.close();
   } else {
     // if the file didn't open, print an error:
-    Serial.println("error opening COUNTER.TXT");
-    // stop();
+    Serial.println(F("error opening COUNTER.TXT"));
+    stop();
   }
 
   // Add +1 to counter and save it for the future
   myFile = SD.open("COUNTER.TXT", FILE_WRITE | O_TRUNC);
   if (myFile) {
-    Serial.print("Adding counter... ");
+    Serial.print(F("Adding counter... "));
     myFile.println(counter + 1);
     myFile.close();
-    Serial.println("Done!");
+    Serial.println(F("Done!"));
   } else {
     // if the file didn't open, print an error:
-    Serial.println("error opening COUNTER.TXT");
-    // stop();
+    Serial.println(F("error adding COUNTER.TXT"));
+     stop();
   }
   // Write header to the actual log
   myFile = SD.open(filename, FILE_WRITE | O_TRUNC | O_CREAT);
   if (myFile) {
-    Serial.print("Writing header... ");
-    myFile.println("looptime,ax,ay,az,gx,gy,gz,baro_temp,baro_pressure");
+    Serial.print(F("Writing header... "));
+    myFile.println(F("looptime,ax,ay,az,gx,gy,gz,baro_temp,baro_pressure"));
     // close the file:
     myFile.close();
-    Serial.println("Done!");
+    Serial.println(F("Done!"));
   } else {
     // if the file didn't open, print an error:
-    Serial.print("error opening ");
+    Serial.print(F("error opening "));
     Serial.println(filename);
+    stop();
   }
 
   Wire.begin();  // join i2c bus (address optional for master)
@@ -226,7 +232,7 @@ void setup() {
  */
 
   if (!bmp.begin(BMP280_ADDRESS)) {
-    Serial.println("Pressure sensor not found!");
+    Serial.println(F("Pressure sensor not found!"));
     stop();
   }
 
@@ -315,13 +321,13 @@ void loop() {
   // výpis všech dostupných informací ze senzoru BMP
   // výpis teploty
   if (debug_baro) {
-    Serial.print("Temperature: ");
+    Serial.print(F("Temperature: "));
     Serial.print(baro_temp);
     Serial.println(" °C.");
     // výpis barometrického tlaku v hekto Pascalech
-    Serial.print("Pressure: ");
+    Serial.print(F("Pressure: "));
     Serial.print(baro_pressure);
-    Serial.println(" Pa");
+    Serial.println(F(" Pa"));
     // vytištění prázdného řádku a pauza po dobu 2 vteřin
     Serial.println();
   }
@@ -331,31 +337,35 @@ void loop() {
   if ((frame_num + 1) % baro_samples == 0) {
     baro_pressure_avg /= baro_samples;
 
+    if (frame_num==baro_samples-1)
+      baro_pressure_avg_previous = baro_pressure_avg; // init first pass delta
     if (debug_deploy) {
-      Serial.print("Previous window: ");
+      Serial.print(F("Frame: "));
+      Serial.println(frame_num);
+      Serial.print(F("Previous window: "));
       Serial.println(baro_pressure_avg_previous);
-      Serial.print("Current window: ");
+      Serial.print(F("Current window: "));
       Serial.println(baro_pressure_avg);
-      Serial.print("Delta: ");
+      Serial.print(F("Delta: "));
       Serial.println(baro_pressure_avg - baro_pressure_avg_previous);
     }
-    if ((baro_pressure_avg - baro_pressure_avg_previous) > 10) {
+    if (((baro_pressure_avg - baro_pressure_avg_previous) > 10) && armed) {
       deploy_chute = true;
     }
     baro_pressure_avg_previous = baro_pressure_avg;
     baro_pressure_avg = 0;
   }
 
-  if (deploy_chute) {
-    myservo.write(180);
-  } else {
-    myservo.write(0);
-  }
+
 
   if (armed) {
     digitalWrite(led_arm, HIGH);
     
-    myservo.write(pitch);
+    if (deploy_chute) {;
+      myservo.write(servo_release);
+    } else {
+      myservo.write(servo_latch);
+    }
 
     myFile = SD.open(filename, FILE_WRITE);
 
@@ -380,4 +390,13 @@ void loop() {
   }
   // Serial.println(pos, DEC);
   frame_num++;
+
+if (print_counter%100==0){
+  Serial.print(F("Arm: "));
+  Serial.println(armed);
+  Serial.print(F("Deploy: "));
+  Serial.println(deploy_chute);
+  print_counter=0;
+}
+print_counter++;
 }
