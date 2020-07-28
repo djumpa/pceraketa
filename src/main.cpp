@@ -62,6 +62,7 @@ File myFile;
 float baro_pressure_avg;
 float baro_pressure_avg_previous;
 uint8_t baro_samples = 25;
+float baro_threshold = 50.0;
 int frame_num;
 
 unsigned long previousMillis = 0;  // will store last time LED was updated
@@ -95,9 +96,9 @@ void calculate_IMU_error() {
     Wire.write(0x3B);
     Wire.endTransmission(false);
     Wire.requestFrom(MPU9250_ADDRESS, 6);
-    acc_x = (Wire.read() << 8 | Wire.read()) / 16384.0;
-    acc_y = (Wire.read() << 8 | Wire.read()) / 16384.0;
-    acc_z = (Wire.read() << 8 | Wire.read()) / 16384.0;
+    acc_x = (Wire.read() << 8 | Wire.read()) / 2048.0;
+    acc_y = (Wire.read() << 8 | Wire.read()) / 2048.0;
+    acc_z = (Wire.read() << 8 | Wire.read()) / 2048.0;
     // Sum all readings
     AccErrorX =
         AccErrorX +
@@ -121,9 +122,9 @@ void calculate_IMU_error() {
     gyro_y = Wire.read() << 8 | Wire.read();
     gyro_z = Wire.read() << 8 | Wire.read();
     // Sum all readings
-    GyroErrorX = GyroErrorX + (gyro_x / 131.0);
-    GyroErrorY = GyroErrorY + (gyro_y / 131.0);
-    GyroErrorZ = GyroErrorZ + (gyro_z / 131.0);
+    GyroErrorX = GyroErrorX + (gyro_x / 65.5);
+    GyroErrorY = GyroErrorY + (gyro_y / 65.5);
+    GyroErrorZ = GyroErrorZ + (gyro_z / 65.5);
     c++;
   }
   // Divide the sum by 200 to get the error value
@@ -150,7 +151,7 @@ void setup() {
   digitalWrite(led_arm, LOW);
   myservo.attach(servo_1);
   myservo.write(servo_latch);
-  Serial.begin(115200);
+  Serial.begin(38400);
 
   // Init SD Card
   Serial.print(F("Initializing SD card..."));
@@ -218,18 +219,20 @@ void setup() {
   Wire.write(0x00);            // Make reset - place a 0 into the 6B register
   Wire.endTransmission(true);  // end the transmission
 
-  /*
+  
  // Configure Accelerometer Sensitivity - Full Scale Range (default +/- 2g)
- Wire.beginTransmission(MPU);
+ Wire.beginTransmission(MPU9250_ADDRESS);
  Wire.write(0x1C);                  //Talk to the ACCEL_CONFIG register (1C hex)
- Wire.write(0x10);                  //Set the register bits as 00010000 (+/- 8g
- full scale range) Wire.endTransmission(true);
+ Wire.write(ACC_FULL_SCALE_16_G);                  //Set the register bits as 00010000 (+/- 8g full scale range) 
+ Wire.endTransmission(true);
  // Configure Gyro Sensitivity - Full Scale Range (default +/- 250deg/s)
- Wire.beginTransmission(MPU);
- Wire.write(0x1B);                   // Talk to the GYRO_CONFIG register (1B
- hex) Wire.write(0x10);                   // Set the register bits as 00010000
- (1000deg/s full scale) Wire.endTransmission(true); delay(20);
- */
+ Wire.beginTransmission(MPU9250_ADDRESS);
+ Wire.write(0x1B);                   // Talk to the GYRO_CONFIG register (1Bhex) 
+ Wire.write(GYRO_FULL_SCALE_500_DPS);                   // Set the register bits as 00010000 (1000deg/s full scale) 
+ Wire.endTransmission(true); 
+
+ delay(20);
+ 
 
   if (!bmp.begin(BMP280_ADDRESS)) {
     Serial.println(F("Pressure sensor not found!"));
@@ -271,9 +274,9 @@ void loop() {
 
   // For a range of +-2g, we need to divide the raw values by 16384, according
   // to the datasheet
-  acc_x = (Wire.read() << 8 | Wire.read()) / 16384.0;  // X-axis value
-  acc_y = (Wire.read() << 8 | Wire.read()) / 16384.0;  // Y-axis value
-  acc_z = (Wire.read() << 8 | Wire.read()) / 16384.0;  // Z-axis value
+  acc_x = (Wire.read() << 8 | Wire.read()) / 2048.0;  // X-axis value
+  acc_y = (Wire.read() << 8 | Wire.read()) / 2048.0;  // Y-axis value
+  acc_z = (Wire.read() << 8 | Wire.read()) / 2048.0;  // Z-axis value
 
   accAngleX = (atan(acc_y / sqrt(pow(acc_x, 2) + pow(acc_z, 2))) * 180 / PI) -
               0.88;  // AccErrorX ~(0.58) See the calculate_IMU_error()custom
@@ -290,14 +293,14 @@ void loop() {
   Wire.requestFrom(MPU9250_ADDRESS, 6);  // Read 4 registers total, each axis
                                          // value is stored in 2 registers
   gyro_x = (Wire.read() << 8 | Wire.read()) /
-           131.0;  // For a 250deg/s range we have to divide first the raw value
+           65.5;  // For a 250deg/s range we have to divide first the raw value
                    // by 131.0, according to the datasheet
-  gyro_y = (Wire.read() << 8 | Wire.read()) / 131.0;
-  gyro_z = (Wire.read() << 8 | Wire.read()) / 131.0;
+  gyro_y = (Wire.read() << 8 | Wire.read()) / 65.5;
+  gyro_z = (Wire.read() << 8 | Wire.read()) / 65.5;
   // Correct the outputs with the calculated error values
-  gyro_x = gyro_x + 1.92;  // GyroErrorX ~(-0.56)
-  gyro_y = gyro_y + 2.30;  // GyroErrorY ~(2)
-  gyro_z = gyro_z - 1.06;  // GyroErrorZ ~ (-0.8)
+  gyro_x = gyro_x + 2.01;  // GyroErrorX ~(-0.56)
+  gyro_y = gyro_y + 2.23;  // GyroErrorY ~(2)
+  gyro_z = gyro_z - 1.08;  // GyroErrorZ ~ (-0.8)
   // Currently the raw values are in degrees per seconds, deg/s, so we need to
   // multiply by sendonds (s) to get the angle in degrees
   gyroAngleX = gyroAngleX + gyro_x * elapsedTime;  // deg/s * s = deg
@@ -349,7 +352,7 @@ void loop() {
       Serial.print(F("Delta: "));
       Serial.println(baro_pressure_avg - baro_pressure_avg_previous);
     }
-    if (((baro_pressure_avg - baro_pressure_avg_previous) > 10) && armed) {
+    if (((baro_pressure_avg - baro_pressure_avg_previous) > baro_threshold) && armed) {
       deploy_chute = true;
     }
     baro_pressure_avg_previous = baro_pressure_avg;
